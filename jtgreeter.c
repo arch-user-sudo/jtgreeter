@@ -529,6 +529,9 @@ static void stop_tty1_getty_runtime(void) {
 	clear_tty1_console();
 }
 
+static volatile sig_atomic_t g_terminate = 0;
+static void on_term_signal(int sig) { (void)sig; g_terminate = 1; }
+
 static int run_greeter_once(void) {
 	struct server_g sg = {0};
 	struct server *srv = &sg.srv;
@@ -625,9 +628,13 @@ static int run_greeter_once(void) {
 	setenv("WAYLAND_DISPLAY", socket, true);
 	wlr_log(WLR_INFO, "jtgreeter running on WAYLAND_DISPLAY=%s", socket);
 
-	while (srv->running) {
+	while (srv->running && !g_terminate) {
 		wl_display_flush_clients(srv->wl_display);
 		wl_event_loop_dispatch(wl_display_get_event_loop(srv->wl_display), 16);
+	}
+	if (g_terminate) {
+		srv->running = false;
+		srv->launch_jtlabwc = false;
 	}
 
 	char user_to_launch[128] = {0};
@@ -717,7 +724,9 @@ static int run_greeter_mode(void) {
 	wlr_log_init(WLR_INFO, NULL);
 	/* Behave like a display manager: after a user session exits, show greeter again. */
 	for (;;) {
+		if (g_terminate) return 0;
 		int rc = run_greeter_once();
+		if (g_terminate) return 0;
 		if (rc != 0) return rc;
 		/* Small delay to avoid tight respawn loops if backend/session fails immediately. */
 		sleep(1);
@@ -731,9 +740,6 @@ static void usage(const char *argv0) {
 		"  --accent COLOR   Accent color (e.g. #E8A03C), like jtspeedtest\n",
 		argv0);
 }
-
-static volatile sig_atomic_t g_terminate = 0;
-static void on_term_signal(int sig) { (void)sig; g_terminate = 1; }
 
 static void preload_jt_binaries(void) {
 	pid_t pid = fork();

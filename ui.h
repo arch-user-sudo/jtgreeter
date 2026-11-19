@@ -231,13 +231,8 @@ static inline void paint_ambient(cairo_t *cr, double t, double cx, double cy, bo
 
 static inline void ui_draw(cairo_t *cr, struct ui_state *ui, int w, int h) {
 	double t = ui_mono_sec() - ui->t0;
-	cairo_pattern_t *bg = cairo_pattern_create_linear(0.0, 0.0, 0.0, h);
-	cairo_pattern_add_color_stop_rgba(bg, 0.0, R_(C_BG_TOP), G_(C_BG_TOP), B_(C_BG_TOP), 1.0);
-	cairo_pattern_add_color_stop_rgba(bg, 0.55, R_(0x050506), G_(0x050506), B_(0x050506), 1.0);
-	cairo_pattern_add_color_stop_rgba(bg, 1.0, R_(C_BG), G_(C_BG), B_(C_BG), 1.0);
-	cairo_set_source(cr, bg);
+	ui_rgba(cr, C_BG, 1.0);
 	cairo_paint(cr);
-	cairo_pattern_destroy(bg);
 
 	double cx = w / 2.0, cy = h / 2.0 - 40.0;
 	paint_ambient(cr, t, cx, cy, ui->authenticating);
