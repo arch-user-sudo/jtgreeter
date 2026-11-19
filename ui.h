@@ -248,7 +248,7 @@ static inline void ui_draw(cairo_t *cr, struct ui_state *ui, int w, int h) {
 	ui_rounded_rect(cr, card_x + 0.5, card_y + 0.5, card_w - 1.0, card_h - 1.0, 13.5);
 	cairo_stroke(cr);
 
-	ui_text(cr, "JTLab Greeter", 22.0, 700, C_FG, 0.96, cx, card_y + 34.0, ALIGN_CENTER);
+	ui_text(cr, "Hi?", 22.0, 700, C_FG, 0.96, cx, card_y + 34.0, ALIGN_CENTER);
 	ui_text(cr, "Sign in to start jtlabwc", 11.5, 400, C_DIM, 0.9, cx, card_y + 64.0, ALIGN_CENTER);
 
 	double fx = card_x + 36.0, fw = card_w - 72.0, fh = 44.0;
