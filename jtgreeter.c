@@ -511,21 +511,23 @@ static void clear_tty1_console(void) {
 }
 
 static void stop_tty1_getty_runtime(void) {
-	/* Best-effort runtime stop/cleanup for tty1 handoff (OpenRC and systemd). */
+	/* Best-effort runtime stop/cleanup for tty1 handoff (OpenRC and systemd).
+	 * Avoid killing all tty1 processes here: this can run inside the greeter
+	 * during session handoff and terminate jtgreeter itself. */
 	const char *cmds[] = {
 		"rc-service agetty.tty1 --ifstarted stop >/dev/null 2>&1",
 		"rc-service getty.tty1 --ifstarted stop >/dev/null 2>&1",
 		"rc-service agetty-autologin.tty1 --ifstarted stop >/dev/null 2>&1",
 		"rc-service fgetty.tty1 --ifstarted stop >/dev/null 2>&1",
 		"systemctl stop getty@tty1.service autovt@tty1.service >/dev/null 2>&1",
+		/* Best-effort: stop common tty1 login/getty programs without killing everything on the tty. */
+		"pkill -x agetty >/dev/null 2>&1",
+		"pkill -x getty >/dev/null 2>&1",
+		"pkill -x fgetty >/dev/null 2>&1",
+		"pkill -x login >/dev/null 2>&1",
 		NULL
 	};
 	for (int i = 0; cmds[i]; i++) (void)system(cmds[i]);
-
-	if (access("/usr/bin/fuser", X_OK) == 0 || access("/bin/fuser", X_OK) == 0)
-		(void)system("fuser -sk /dev/tty1 >/dev/null 2>&1");
-	else
-		(void)system("pkill -t tty1 >/dev/null 2>&1");
 
 	clear_tty1_console();
 }
