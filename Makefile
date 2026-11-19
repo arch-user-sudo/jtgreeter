@@ -88,6 +88,10 @@ install: jtgreeter jtgreeterctl
 		printf '%s\n' '#%PAM-1.0' 'auth       include      system-local-login' 'account    include      system-local-login' 'password   include      system-local-login' 'session    include      system-local-login' > /tmp/jtgreeter.pam.install; \
 		install -Dm644 /tmp/jtgreeter.pam.install $(DESTDIR)$(SYSCONFDIR)/pam.d/jtgreeter; rm -f /tmp/jtgreeter.pam.install; pam_installed=1; \
 		echo "installed PAM config (system-local-login) to $(DESTDIR)$(SYSCONFDIR)/pam.d/jtgreeter"; \
+	elif [ -f /etc/pam.d/system-login ] || [ -f $(DESTDIR)/etc/pam.d/system-login ]; then \
+		printf '%s\n' '#%PAM-1.0' 'auth       include      system-login' 'account    include      system-login' 'password   include      system-login' 'session    include      system-login' > /tmp/jtgreeter.pam.install; \
+		install -Dm644 /tmp/jtgreeter.pam.install $(DESTDIR)$(SYSCONFDIR)/pam.d/jtgreeter; rm -f /tmp/jtgreeter.pam.install; pam_installed=1; \
+		echo "installed PAM config (system-login) to $(DESTDIR)$(SYSCONFDIR)/pam.d/jtgreeter"; \
 	elif [ -f /etc/pam.d/login ] || [ -f $(DESTDIR)/etc/pam.d/login ]; then \
 		printf '%s\n' '#%PAM-1.0' 'auth       include      login' 'account    include      login' 'password   include      login' 'session    include      login' > /tmp/jtgreeter.pam.install; \
 		install -Dm644 /tmp/jtgreeter.pam.install $(DESTDIR)$(SYSCONFDIR)/pam.d/jtgreeter; rm -f /tmp/jtgreeter.pam.install; pam_installed=1; \

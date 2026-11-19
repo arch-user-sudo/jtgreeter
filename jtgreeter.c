@@ -365,9 +365,7 @@ static void new_output_notify(struct wl_listener *listener, void *data) {
 	wlr_scene_output_layout_add_output(srv->scene_layout, lout, scene_output);
 }
 
-static void apply_pam_env(pam_handle_t *pamh) {
-	if (!pamh) return;
-	char **envlist = pam_getenvlist(pamh);
+static void apply_pam_envlist(char **envlist) {
 	if (!envlist) return;
 	for (char **e = envlist; *e; e++) {
 		char *eq = strchr(*e, '=');
@@ -376,12 +374,10 @@ static void apply_pam_env(pam_handle_t *pamh) {
 			setenv(*e, eq + 1, 1);
 			*eq = '=';
 		}
-		free(*e);
 	}
-	free(envlist);
 }
 
-static void exec_jtlabwc_as_user(const char *username, pam_handle_t *pamh) {
+static void exec_jtlabwc_as_user(const char *username, char **pam_envlist) {
 	struct passwd *pw = getpwnam(username);
 	if (!pw) {
 		fprintf(stderr, "jtgreeter: unknown user '%s'\n", username);
@@ -439,7 +435,7 @@ static void exec_jtlabwc_as_user(const char *username, pam_handle_t *pamh) {
 
 	/* Apply PAM environment last so pam_elogind/pam_systemd provided vars
 	 * (XDG_RUNTIME_DIR, XDG_SESSION_ID, DBUS_SESSION_BUS_ADDRESS, etc.) take effect. */
-	apply_pam_env(pamh);
+	apply_pam_envlist(pam_envlist);
 
 	/* Never keep greeter/root runtime dir in the user session. */
 	const char *xdg = getenv("XDG_RUNTIME_DIR");
@@ -687,9 +683,15 @@ static int run_greeter_once(void) {
 			}
 		}
 
+		char **pam_env = pam_getenvlist(pamh);
+
 		pid_t pid = fork();
 		if (pid < 0) {
 			perror("jtgreeter: fork");
+			if (pam_env) {
+				for (char **e = pam_env; *e; e++) free(*e);
+				free(pam_env);
+			}
 			ui_pam_login_end(pamh);
 			return 1;
 		} else if (pid == 0) {
@@ -710,7 +712,7 @@ static int run_greeter_once(void) {
 			setenv("XDG_SEAT", "seat0", 0);
 			setenv("XDG_VTNR", "1", 0);
 
-			exec_jtlabwc_as_user(user_to_launch, pamh);
+			exec_jtlabwc_as_user(user_to_launch, pam_env);
 			_exit(127);
 		} else {
 			int status = 0;
@@ -718,6 +720,10 @@ static int run_greeter_once(void) {
 				if (errno == EINTR) continue;
 				perror("jtgreeter: waitpid");
 				break;
+			}
+			if (pam_env) {
+				for (char **e = pam_env; *e; e++) free(*e);
+				free(pam_env);
 			}
 			ui_pam_login_end(pamh);
 			if (WIFEXITED(status) && WEXITSTATUS(status) != 0) {
