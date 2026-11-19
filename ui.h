@@ -378,6 +378,13 @@ fail:
  * compositor/seat is released, before launching the user session). */
 static inline bool ui_pam_open_session(pam_handle_t *pamh, char *err, size_t errlen) {
 	if (!pamh) return false;
+
+	/* Help pam_systemd/logind register a proper graphical user session on tty1. */
+	pam_putenv(pamh, "XDG_SEAT=seat0");
+	pam_putenv(pamh, "XDG_VTNR=1");
+	pam_putenv(pamh, "XDG_SESSION_TYPE=wayland");
+	pam_putenv(pamh, "XDG_SESSION_CLASS=user");
+
 	int r = pam_setcred(pamh, PAM_ESTABLISH_CRED);
 	if (r != PAM_SUCCESS) goto fail;
 	r = pam_open_session(pamh, 0);
