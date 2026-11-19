@@ -38,6 +38,7 @@
 #include <signal.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/ioctl.h>
 #include <sys/resource.h>
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -692,12 +693,23 @@ static int run_greeter_once(void) {
 			ui_pam_login_end(pamh);
 			return 1;
 		} else if (pid == 0) {
-			/* Session child: drop privileges and exec jtlabwc with PAM/session environment. */
-			/* Reset signals to defaults in child. */
+			/* Session child: set up session/tty, drop privileges, exec jtlabwc. */
 			signal(SIGTERM, SIG_DFL);
 			signal(SIGINT, SIG_DFL);
 			signal(SIGHUP, SIG_DFL);
 			setsid();
+
+			/* Give the user session a controlling tty on tty1 (helps logind/DRM handoff). */
+			int ttyfd = open("/dev/tty1", O_RDWR | O_NOCTTY);
+			if (ttyfd >= 0) {
+				(void)dup2(ttyfd, STDIN_FILENO);
+				if (ttyfd > STDERR_FILENO) close(ttyfd);
+				(void)ioctl(STDIN_FILENO, TIOCSCTTY, 0);
+			}
+
+			setenv("XDG_SEAT", "seat0", 0);
+			setenv("XDG_VTNR", "1", 0);
+
 			exec_jtlabwc_as_user(user_to_launch, pamh);
 			_exit(127);
 		} else {
