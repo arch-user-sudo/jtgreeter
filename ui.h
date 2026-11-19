@@ -344,6 +344,7 @@ static inline bool ui_pam_authenticate_user(const char *user, const char *pass,
 		if (err && errlen) snprintf(err, errlen, "PAM start failed");
 		return false;
 	}
+	pam_set_item(pamh, PAM_TTY, "/dev/tty1");
 	r = pam_authenticate(pamh, 0);
 	if (r != PAM_SUCCESS) goto fail;
 	r = pam_acct_mgmt(pamh, 0);
