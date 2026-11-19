@@ -302,7 +302,7 @@ static inline int pam_conv_cb(int num_msg, const struct pam_message **msg,
 	if (!replies) return PAM_CONV_ERR;
 	for (int i = 0; i < num_msg; i++) {
 		if (msg[i]->msg_style == PAM_PROMPT_ECHO_OFF || msg[i]->msg_style == PAM_PROMPT_ECHO_ON)
-			replies[i].resp = strdup(ctx->password ? ctx->password : "");
+			replies[i].resp = strdup(ctx && ctx->password ? ctx->password : "");
 	}
 	*resp = replies; return PAM_SUCCESS;
 }
@@ -330,17 +330,30 @@ static inline bool ui_pam_auth(const char *user, const char *pass, char *err, si
 	return false;
 }
 
+/* Persistent conversation context for greeter login: pamh may be used after
+ * ui_pam_authenticate_user() returns (open session, getenvlist, close), so the
+ * conv pointer/appdata must remain valid for the lifetime of the handle. */
+static struct pam_conv_ctx g_pam_login_ctx;
+static char g_pam_login_password[128];
+static struct pam_conv g_pam_login_conv = { .conv = pam_conv_cb, .appdata_ptr = &g_pam_login_ctx };
+
+static inline void ui_pam_login_clear_password(void) {
+	memset(g_pam_login_password, 0, sizeof(g_pam_login_password));
+	g_pam_login_ctx.password = NULL;
+}
+
 /* Greeter login step 1: verify credentials while greeter UI/compositor is running.
- * On success returns an open pam handle; call ui_pam_session_open() later (after
+ * On success returns an open pam handle; call ui_pam_open_session() later (after
  * greeter releases seat/DRM) then ui_pam_login_end() after session exits. */
 static inline bool ui_pam_authenticate_user(const char *user, const char *pass,
 		pam_handle_t **out_pamh, char *err, size_t errlen) {
 	*out_pamh = NULL;
-	struct pam_conv_ctx ctx = { .password = pass };
-	struct pam_conv conv = { .conv = pam_conv_cb, .appdata_ptr = &ctx };
+	snprintf(g_pam_login_password, sizeof(g_pam_login_password), "%s", pass ? pass : "");
+	g_pam_login_ctx.password = g_pam_login_password;
 	pam_handle_t *pamh = NULL;
-	int r = pam_start("jtgreeter", user, &conv, &pamh);
+	int r = pam_start("jtgreeter", user, &g_pam_login_conv, &pamh);
 	if (r != PAM_SUCCESS) {
+		ui_pam_login_clear_password();
 		if (err && errlen) snprintf(err, errlen, "PAM start failed");
 		return false;
 	}
@@ -350,11 +363,14 @@ static inline bool ui_pam_authenticate_user(const char *user, const char *pass,
 	r = pam_acct_mgmt(pamh, 0);
 	if (r == PAM_NEW_AUTHTOK_REQD) r = pam_chauthtok(pamh, PAM_CHANGE_EXPIRED_AUTHTOK);
 	if (r != PAM_SUCCESS) goto fail;
+	/* Password no longer needed after successful auth; keep conv struct valid. */
+	ui_pam_login_clear_password();
 	*out_pamh = pamh;
 	return true;
 fail:
 	if (err && errlen) snprintf(err, errlen, "%s", pam_strerror(pamh, r));
 	pam_end(pamh, r);
+	ui_pam_login_clear_password();
 	return false;
 }
 
@@ -373,6 +389,7 @@ static inline bool ui_pam_open_session(pam_handle_t *pamh, char *err, size_t err
 fail:
 	if (err && errlen) snprintf(err, errlen, "%s", pam_strerror(pamh, r));
 	pam_end(pamh, r);
+	ui_pam_login_clear_password();
 	return false;
 }
 
@@ -381,6 +398,7 @@ static inline void ui_pam_login_end(pam_handle_t *pamh) {
 	pam_close_session(pamh, 0);
 	pam_setcred(pamh, PAM_DELETE_CRED);
 	pam_end(pamh, PAM_SUCCESS);
+	ui_pam_login_clear_password();
 }
 
 #endif
