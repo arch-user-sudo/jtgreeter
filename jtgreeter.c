@@ -511,12 +511,13 @@ static void clear_tty1_console(void) {
 }
 
 static void stop_tty1_getty_runtime(void) {
-	/* Best-effort runtime stop/cleanup for tty1 handoff. */
+	/* Best-effort runtime stop/cleanup for tty1 handoff (OpenRC and systemd). */
 	const char *cmds[] = {
 		"rc-service agetty.tty1 --ifstarted stop >/dev/null 2>&1",
 		"rc-service getty.tty1 --ifstarted stop >/dev/null 2>&1",
 		"rc-service agetty-autologin.tty1 --ifstarted stop >/dev/null 2>&1",
 		"rc-service fgetty.tty1 --ifstarted stop >/dev/null 2>&1",
+		"systemctl stop getty@tty1.service autovt@tty1.service >/dev/null 2>&1",
 		NULL
 	};
 	for (int i = 0; cmds[i]; i++) (void)system(cmds[i]);
