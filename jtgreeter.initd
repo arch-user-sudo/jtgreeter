@@ -28,6 +28,8 @@ depend() {
 
 start_pre() {
 	checkpath --directory --owner root:root --mode 0755 /run
+	checkpath --directory --owner root:root --mode 0755 /run/user
+	checkpath --directory --owner root:root --mode 0700 /run/user/0
 	checkpath --file --owner root:root --mode 0644 /var/log/jtgreeter.log
 
 	# Try to start seat providers if installed.

@@ -6,7 +6,9 @@ Before=getty@tty1.service autovt@tty1.service
 
 [Service]
 Type=simple
+Environment=XDG_RUNTIME_DIR=/run/user/0
 # Runtime conflict handling (avoid persistent system config changes).
+ExecStartPre=+/bin/sh -c 'mkdir -p /run/user/0 && chown root:root /run/user/0 && chmod 0700 /run/user/0'
 ExecStartPre=-/bin/sh -c 'systemctl stop getty@tty1.service autovt@tty1.service 2>/dev/null || true'
 ExecStart=@BINDIR@/jtgreeter
 Restart=on-failure
