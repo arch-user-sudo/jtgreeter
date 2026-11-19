@@ -1,0 +1,29 @@
+[Unit]
+Description=JTLab Greeter (Wayland login screen)
+After=systemd-user-sessions.service plymouth-quit-wait.service getty@tty1.service autovt@tty1.service
+Conflicts=getty@tty1.service autovt@tty1.service
+OnFailure=getty@tty1.service
+
+[Service]
+Type=idle
+# Runtime conflict handling (avoid persistent system config changes).
+ExecStartPre=-/bin/sh -c 'systemctl stop getty@tty1.service autovt@tty1.service 2>/dev/null || true'
+ExecStart=@BINDIR@/jtgreeter
+Restart=on-failure
+RestartSec=2
+
+# Run on tty1 as a login greeter/compositor
+TTYPath=/dev/tty1
+TTYReset=yes
+TTYVHangup=yes
+TTYVTDisallocate=yes
+StandardInput=tty
+StandardOutput=journal
+StandardError=journal
+
+PAMName=jtgreeter
+UtmpIdentifier=tty1
+UtmpMode=user
+
+[Install]
+WantedBy=multi-user.target

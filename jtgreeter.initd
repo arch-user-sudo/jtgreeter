@@ -1,0 +1,59 @@
+#!/sbin/openrc-run
+
+name="jtgreeter"
+description="JTLab Greeter (Wayland login screen)"
+
+command="@BINDIR@/jtgreeter"
+command_args=""
+command_user="root:root"
+
+# Use supervise-daemon for reliable respawn on OpenRC (recommended).
+supervisor=supervise-daemon
+respawn_delay=2
+respawn_max=0
+
+# Logs (adjust as desired)
+output_log="/var/log/jtgreeter.log"
+error_log="/var/log/jtgreeter.log"
+
+depend() {
+	need localmount
+	after bootmisc dbus
+	# elogind/logind/seatd help wlroots/libseat acquire DRM/input access.
+	# Kept optional for portability across different seat setups.
+	want elogind seatd
+	after elogind seatd
+	provide display-manager
+}
+
+start_pre() {
+	checkpath --directory --owner root:root --mode 0755 /run
+	checkpath --file --owner root:root --mode 0644 /var/log/jtgreeter.log
+
+	# Try to start seat providers if installed.
+	for svc in elogind seatd; do
+		if [ -x "/etc/init.d/$svc" ] && ! rc-service "$svc" status >/dev/null 2>&1; then
+			rc-service "$svc" start >/dev/null 2>&1 || true
+		fi
+	done
+
+	# jtgreeter needs a free VT (tty1). Stop common tty1 getty/autologin services at runtime
+	# (avoid persistent system config changes so uninstall leaves setup intact).
+	for svc in agetty.tty1 getty.tty1 agetty-autologin.tty1 fgetty.tty1 \
+		   agetty-tty1 getty-tty1; do
+		if [ -x "/etc/init.d/$svc" ]; then
+			rc-service "$svc" --ifstarted stop >/dev/null 2>&1 || \
+			rc-service "$svc" stop >/dev/null 2>&1 || true
+		fi
+	done
+
+	# Best-effort runtime stop for processes currently holding tty1.
+	# Note: if a getty on tty1 is respawned by /etc/inittab, init may restart it;
+	# in that case the inittab tty1 entry must be disabled (cannot be fixed without editing).
+	if command -v fuser >/dev/null 2>&1; then
+		fuser -sk /dev/tty1 >/dev/null 2>&1 || true
+	elif command -v lsof >/dev/null 2>&1; then
+		lsof -t /dev/tty1 2>/dev/null | xargs -r kill >/dev/null 2>&1 || true
+	fi
+	sleep 0.2 2>/dev/null || sleep 1
+}
