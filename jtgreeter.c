@@ -461,7 +461,7 @@ static void exec_jtlabwc_as_user(const char *username, char **pam_envlist) {
 		(void)dup2(lfd, STDOUT_FILENO);
 		(void)dup2(lfd, STDERR_FILENO);
 		if (lfd > STDERR_FILENO) close(lfd);
-		fprintf(stderr, "\n--- jtgreeter launching jtlabwc for user %s (log: %s) ---\n", pw->pw_name, logpath);
+		fprintf(stderr, "\n--- jtgreeter launching dbus-run-session jtlabwc for user %s (log: %s) ---\n", pw->pw_name, logpath);
 		fprintf(stderr, "HOME=%s XDG_RUNTIME_DIR=%s XDG_SESSION_TYPE=%s WAYLAND_DISPLAY=%s DISPLAY=%s PATH=%s\n",
 			getenv("HOME") ? getenv("HOME") : "",
 			getenv("XDG_RUNTIME_DIR") ? getenv("XDG_RUNTIME_DIR") : "",
@@ -471,10 +471,10 @@ static void exec_jtlabwc_as_user(const char *username, char **pam_envlist) {
 			getenv("PATH") ? getenv("PATH") : "");
 	}
 
-	execlp("jtlabwc", "jtlabwc", (char *)NULL);
-	execl("/usr/local/bin/jtlabwc", "jtlabwc", (char *)NULL);
-	execl("/usr/bin/jtlabwc", "jtlabwc", (char *)NULL);
-	perror("jtgreeter: failed to exec jtlabwc");
+	execlp("dbus-run-session", "dbus-run-session", "--", "jtlabwc", (char *)NULL);
+	execlp("dbus-run-session", "dbus-run-session", "--", "/usr/local/bin/jtlabwc", (char *)NULL);
+	execlp("dbus-run-session", "dbus-run-session", "--", "/usr/bin/jtlabwc", (char *)NULL);
+	perror("jtgreeter: failed to exec dbus-run-session jtlabwc");
 	_exit(127);
 }
 
