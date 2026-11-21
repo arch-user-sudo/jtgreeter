@@ -151,17 +151,6 @@ install: jtgreeter jtgreeterctl
 			sed 's|@BINDIR@|$(BINDIR)|g' jtgreeter.initd > "$$inittmp"; \
 			install -Dm755 "$$inittmp" $(DESTDIR)$(OPENRC_INITDIR)/jtgreeter; \
 			echo "installed OpenRC init script to $(DESTDIR)$(OPENRC_INITDIR)/jtgreeter"; \
-			if [ -z "$(DESTDIR)" ] && [ -f /etc/inittab ]; then \
-				if grep -Eq '^[[:space:]]*[^#].*tty1' /etc/inittab 2>/dev/null && grep -Eq '^[[:space:]]*[^#].*(getty|agetty)' /etc/inittab 2>/dev/null; then \
-					cp -f /etc/inittab /etc/inittab.bak.jtgreeter 2>/dev/null || true; \
-					sed -i '/^[[:space:]]*#/b; /tty1/{ /getty/b c; /agetty/b c; b }; b; :c s/^/# jtgreeter-disabled: /' /etc/inittab || true; \
-					if grep -q '^# jtgreeter-disabled: ' /etc/inittab 2>/dev/null; then \
-						echo "commented out active tty1 getty/agetty entries in /etc/inittab (backup: /etc/inittab.bak.jtgreeter)"; \
-						command -v init >/dev/null 2>&1 && init q >/dev/null 2>&1 || true; \
-						command -v telinit >/dev/null 2>&1 && telinit q >/dev/null 2>&1 || true; \
-					fi; \
-				fi; \
-			fi; \
 			if [ -z "$(DESTDIR)" ]; then \
 				echo "to enable: rc-update add jtgreeter default"; \
 			fi; \
@@ -173,6 +162,48 @@ install: jtgreeter jtgreeterctl
 			echo "unknown INIT='$$init' (expected auto|systemd|openrc|none)" >&2; exit 1; \
 			;; \
 	esac
+
+# Opt-in inittab edit. Run `make install greeter` to disable the tty1 getty
+# after installing; plain `make install` never touches /etc/inittab.
+greeter:
+	@init="$(INIT)"; \
+	if [ "$$init" = "auto" ]; then \
+		if [ -d /run/systemd/system ] || command -v systemctl >/dev/null 2>&1; then \
+			init=systemd; \
+		elif [ -d /run/openrc ] || [ -x /sbin/openrc-run ] || command -v rc-service >/dev/null 2>&1; then \
+			init=openrc; \
+		else \
+			init=none; \
+		fi; \
+	fi; \
+	if [ "$$init" != "openrc" ]; then \
+		echo "skipping /etc/inittab edit: init is '$$init' (expected openrc; set INIT=openrc to force)"; \
+		exit 0; \
+	fi; \
+	if [ -n "$(DESTDIR)" ]; then \
+		echo "skipping /etc/inittab edit: DESTDIR is set"; \
+		exit 0; \
+	fi; \
+	if [ ! -f /etc/inittab ]; then \
+		echo "skipping /etc/inittab edit: /etc/inittab not found"; \
+		exit 0; \
+	fi; \
+	if grep -q '^# jtgreeter-disabled: ' /etc/inittab 2>/dev/null; then \
+		echo "tty1 getty/agetty entries already disabled in /etc/inittab"; \
+		exit 0; \
+	fi; \
+	if grep -Eq '^[[:space:]]*[^#].*tty1' /etc/inittab 2>/dev/null && \
+	   grep -Eq '^[[:space:]]*[^#].*(getty|agetty)' /etc/inittab 2>/dev/null; then \
+		cp -f /etc/inittab /etc/inittab.bak.jtgreeter 2>/dev/null || true; \
+		sed -i '/^[[:space:]]*#/b; /tty1/{ /getty/b c; /agetty/b c; b }; b; :c s/^/# jtgreeter-disabled: /' /etc/inittab || true; \
+		if grep -q '^# jtgreeter-disabled: ' /etc/inittab 2>/dev/null; then \
+			echo "commented out active tty1 getty/agetty entries in /etc/inittab (backup: /etc/inittab.bak.jtgreeter)"; \
+			command -v init >/dev/null 2>&1 && init q >/dev/null 2>&1 || true; \
+			command -v telinit >/dev/null 2>&1 && telinit q >/dev/null 2>&1 || true; \
+		fi; \
+	else \
+		echo "no active tty1 getty/agetty entries found in /etc/inittab; nothing to disable"; \
+	fi
 
 uninstall:
 	rm -f $(DESTDIR)$(BINDIR)/jtgreeter
@@ -198,4 +229,4 @@ distclean: clean
 	rm -f wlroots.c
 	rm -rf amalgamate-build
 
-.PHONY: all install uninstall clean distclean amalgamate
+.PHONY: all install greeter uninstall clean distclean amalgamate

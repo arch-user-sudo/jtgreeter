@@ -25,5 +25,6 @@ INIT ?= auto
 SYSTEMD_SYSTEM_UNITDIR ?= $(shell $(PKG_CONFIG) --variable=systemdsystemunitdir systemd 2>/dev/null || echo /usr/lib/systemd/system)
 OPENRC_INITDIR ?= $(SYSCONFDIR)/init.d
 
-# (Reserved/compat) tty1 conflicts are handled at service runtime; install avoids persistent edits by default.
+# tty1 conflicts are handled at service runtime. The /etc/inittab edit is opt-in:
+# run `make install greeter` to disable the tty1 getty after installing.
 DISABLE_TTY1 ?= no
