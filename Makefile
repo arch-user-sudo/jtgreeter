@@ -94,9 +94,9 @@ jtgreeterctl: jtgreeterctl.c
 install: jtgreeter jtgreeterctl
 	install -Dm755 jtgreeter $(DESTDIR)$(BINDIR)/jtgreeter
 	install -Dm755 jtgreeterctl $(DESTDIR)$(BINDIR)/jtgreeterctl
-	@install -d -m 0755 $(DESTDIR)/etc/jt; \
+	@install -d -m 0777 $(DESTDIR)/etc/jt; \
 	if [ ! -f $(DESTDIR)/etc/jt/accent.conf ]; then printf '%s\n' '#E8A03C' > $(DESTDIR)/etc/jt/accent.conf; fi; \
-	chmod 0644 $(DESTDIR)/etc/jt/accent.conf 2>/dev/null || true; \
+	chmod 0666 $(DESTDIR)/etc/jt/accent.conf 2>/dev/null || true; \
 	echo "installed accent config $(DESTDIR)/etc/jt/accent.conf"
 	@# Install a distro-appropriate PAM config when possible for portability.
 	@pamtmp=$$(mktemp $${TMPDIR:-/tmp}/jtgreeter.pam.XXXXXX) || exit 1; \
