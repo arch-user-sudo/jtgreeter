@@ -6,7 +6,7 @@
  * Regenerate by running `python3 amalgamate.py` (meson does this at configure time).
  * (regeneration only works while wlroots/ still exists).
  *
- * features from config.mk: WLR_USE_UNSTABLE
+ * features from config.mk: (none)
  */
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE 1

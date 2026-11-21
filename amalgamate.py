@@ -48,9 +48,13 @@ CONFIG_MK = os.path.join(ROOT, 'config.mk')
 # pruning pass: only the wlroots code it can reach is kept.
 SOURCE = os.path.join(ROOT, 'jtgreeter.c')
 
-# Used only when config.mk has no -D options at all.  Features are otherwise
+# Used only when config.mk enables no features.  Features are otherwise
 # determined entirely by the toggles in config.mk.
 DEFAULT_FEATURES = ()
+
+# The feature toggles config.mk exposes.  Other -D options (e.g. the compiler's
+# -DWLR_USE_UNSTABLE) must not be treated as wlroots features.
+FEATURE_TOGGLES = ('XWAYLAND', 'X11_BACKEND', 'VULKAN')
 
 # --------------------------------------------------------------------------
 # what to pull in
@@ -248,24 +252,55 @@ int wlr_version_get_micro(void);
 # --------------------------------------------------------------------------
 
 def config_mk_flags():
-    """Every -D option configured in config.mk (XWAYLAND, ...)."""
+    """Feature toggles from config.mk, with explicit environment overrides.
+
+    Accepts both the documented bare assignments (``XWAYLAND = 1`` /
+    ``XWAYLAND =``) and explicit ``-DXWAYLAND`` flags.  Unrelated -D options
+    such as -DWLR_USE_UNSTABLE are ignored, and assignments set to a false
+    value (0/no/false/off) do not enable a feature.  The Makefile passes
+    command-line/environment toggles (e.g. ``make VULKAN=1``) through the
+    environment; those take precedence over config.mk.
+    """
+    false_values = ('0', 'no', 'false', 'off')
+    overrides = {}
+    for name in FEATURE_TOGGLES:
+        if name in os.environ:
+            value = os.environ[name].strip().lower()
+            overrides[name] = bool(value) and value not in false_values
+
+    flags = {name for name, enabled in overrides.items() if enabled}
+    if set(overrides) == set(FEATURE_TOGGLES):
+        return flags
+
     try:
         text = open(CONFIG_MK, encoding='utf-8').read()
     except OSError:
-        return set()
-    # skip commented-out assignments
-    flags = set()
+        return flags
     for line in text.splitlines():
         s = line.strip()
-        if s.startswith('#'):
+        if not s or s.startswith('#'):
             continue
-        flags.update(re.findall(r'-D([A-Za-z_]\w*)', line))
+        for name in re.findall(r'-D([A-Za-z_]\w*)', s):
+            if name in FEATURE_TOGGLES and name not in overrides:
+                flags.add(name)
+        m = re.match(r'([A-Za-z_]\w*)\s*(?:\?|:)?=\s*(.*)$', s)
+        if not m or m.group(1) not in FEATURE_TOGGLES:
+            continue
+        name = m.group(1)
+        if name in overrides:
+            continue
+        value = m.group(2).split('#', 1)[0].strip().lower()
+        # A bare "XWAYLAND =" in config.mk means "enabled"; explicit false
+        # values disable it.
+        if value == '' or value not in false_values:
+            flags.add(name)
     return flags
 
 
 def pkg_config(*args):
+    exe = os.environ.get('PKG_CONFIG') or 'pkg-config'
     try:
-        out = subprocess.run(['pkg-config'] + list(args),
+        out = subprocess.run([exe] + list(args),
                              capture_output=True, text=True)
         if out.returncode == 0:
             return out.stdout.strip()
@@ -853,11 +888,23 @@ def closure(seeds, units, defs):
     return files
 
 
-def remove_unused_protocols(all_gen, kept_gen):
-    """Delete generated protocol files that pruning left unreachable."""
+def remove_unused_protocols(kept_gen):
+    """Delete protocol files on disk that are not in the generated set.
+
+    Pruning drops unused generated files; stale files from earlier runs (or
+    from a different protocol table) must not be re-collected on the next run.
+    """
     kept = set(kept_gen)
-    for path in all_gen:
-        if path in kept or not path.endswith('-protocol.c'):
+    outdir = os.path.join(GEN, 'protocol')
+    try:
+        names = os.listdir(outdir)
+    except OSError:
+        return
+    for name in names:
+        if not name.endswith('-protocol.c'):
+            continue
+        path = os.path.join(outdir, name)
+        if path in kept:
             continue
         base = path[:-len('-protocol.c')]
         for suffix in ('-protocol.c', '-protocol.h',
@@ -919,7 +966,7 @@ def main():
                      '       (install glslang-tools - it compiles the SPIR-V\n'
                      '       shaders while amalgamating)')
     gen_config_headers(flags)
-    gen_protocols()
+    protocol_files = gen_protocols()
     gen_shaders()
     gen_pnpids()
     if 'VULKAN' in flags:
@@ -939,9 +986,7 @@ def main():
         if not os.path.exists(p):
             sys.exit('error: missing wlroots source %s' % p)
     gen_c = [os.path.join(GEN, 'backend', 'drm', 'pnpids.c')]
-    gen_c += [os.path.join(GEN, 'protocol', f)
-              for f in sorted(os.listdir(os.path.join(GEN, 'protocol')))
-              if f.endswith('-protocol.c')]
+    gen_c += [p for p in protocol_files if p.endswith('-protocol.c')]
     missing = [p for p in gen_c if not os.path.exists(p)]
     if missing:
         sys.exit('error: generated code missing: %s' % ', '.join(missing))
@@ -949,9 +994,8 @@ def main():
     # 3. prune what jtlabwc.c cannot reach
     total_src, total_gen = len(candidates), len(gen_c)
     if prune_enabled:
-        all_gen = list(gen_c)
         candidates, gen_c = prune(candidates, gen_c, dirs, flags)
-        remove_unused_protocols(all_gen, gen_c)
+        remove_unused_protocols(gen_c)
     pruned = (total_src + total_gen) - (len(candidates) + len(gen_c))
 
     # 4. headers, in dependency order

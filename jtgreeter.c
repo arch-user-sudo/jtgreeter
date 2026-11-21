@@ -34,6 +34,7 @@
 #include <grp.h>
 #include <limits.h>
 #include <paths.h>
+#include <poll.h>
 #include <pwd.h>
 #include <signal.h>
 #include <stdlib.h>
@@ -142,7 +143,10 @@ static void greeter_handle_key(struct server *srv, xkb_keysym_t sym) {
 	} else if (sym == XKB_KEY_BackSpace) {
 		char *buf = srv->ui.focus == FIELD_PASS ? srv->ui.password : srv->ui.username;
 		size_t n = strlen(buf);
-		if (n > 0) buf[n-1] = '\0';
+		/* Characters are inserted as UTF-8; don't leave a dangling lead byte. */
+		while (n > 0 && ((unsigned char)buf[n-1] & 0xC0) == 0x80) n--;
+		if (n > 0) n--;
+		buf[n] = '\0';
 	} else {
 		char ch[8];
 		int n = xkb_keysym_to_utf8(sym, ch, sizeof(ch));
@@ -199,19 +203,28 @@ static void keyboard_handle_key(struct wl_listener *listener, void *data) {
 	}
 }
 
+static void update_seat_capabilities(struct server *srv) {
+	uint32_t caps = 0;
+	if (!wl_list_empty(&srv->keyboards)) caps |= WL_SEAT_CAPABILITY_KEYBOARD;
+	wlr_seat_set_capabilities(srv->seat, caps);
+}
+
 static void keyboard_handle_destroy(struct wl_listener *listener, void *data) {
 	(void)data;
 	struct g_keyboard *kb = wl_container_of(listener, kb, destroy);
+	struct server *srv = kb->server;
 	wl_list_remove(&kb->modifiers.link);
 	wl_list_remove(&kb->key.link);
 	wl_list_remove(&kb->destroy.link);
 	wl_list_remove(&kb->link);
 	free(kb);
+	update_seat_capabilities(srv);
 }
 
 static void server_new_keyboard(struct server *srv, struct wlr_input_device *device) {
 	struct wlr_keyboard *wlr_keyboard = wlr_keyboard_from_input_device(device);
 	struct g_keyboard *kb = calloc(1, sizeof(*kb));
+	if (!kb) return;
 	kb->server = srv;
 	kb->wlr_keyboard = wlr_keyboard;
 
@@ -238,9 +251,7 @@ static void server_new_input(struct wl_listener *listener, void *data) {
 	if (device->type == WLR_INPUT_DEVICE_KEYBOARD) {
 		server_new_keyboard(srv, device);
 	}
-	uint32_t caps = 0;
-	if (!wl_list_empty(&srv->keyboards)) caps |= WL_SEAT_CAPABILITY_KEYBOARD;
-	wlr_seat_set_capabilities(srv->seat, caps);
+	update_seat_capabilities(srv);
 }
 
 static void server_request_set_selection(struct wl_listener *listener, void *data) {
@@ -290,6 +301,7 @@ static void output_frame(struct wl_listener *listener, void *data) {
 	}
 
 	struct wlr_render_pass *pass = wlr_renderer_begin_buffer_pass(srv->renderer, buffer, NULL);
+	bool rendered = false;
 	if (pass) {
 		struct wlr_render_rect_options bg = {0};
 		bg.box = (struct wlr_box){0, 0, w, h};
@@ -301,7 +313,14 @@ static void output_frame(struct wl_listener *listener, void *data) {
 			to.dst_box = (struct wlr_box){0, 0, w, h};
 			wlr_render_pass_add_texture(pass, &to);
 		}
-		wlr_render_pass_submit(pass);
+		rendered = wlr_render_pass_submit(pass);
+	}
+	if (!rendered) {
+		wlr_buffer_unlock(buffer);
+		wlr_output_state_finish(&state);
+		free(pixels);
+		if (tex) wlr_texture_destroy(tex);
+		return;
 	}
 
 	wlr_output_state_set_buffer(&state, buffer);
@@ -350,6 +369,7 @@ static void new_output_notify(struct wl_listener *listener, void *data) {
 	wlr_output_state_finish(&state);
 
 	struct g_output *out = calloc(1, sizeof(*out));
+	if (!out) return;
 	out->wlr_output = wlr_output;
 	out->server = srv;
 	out->frame.notify = output_frame;
@@ -361,7 +381,9 @@ static void new_output_notify(struct wl_listener *listener, void *data) {
 	wl_list_insert(&srv->outputs, &out->link);
 
 	struct wlr_output_layout_output *lout = wlr_output_layout_add_auto(srv->output_layout, wlr_output);
+	if (!lout) return;
 	struct wlr_scene_output *scene_output = wlr_scene_output_create(srv->scene, wlr_output);
+	if (!scene_output) return;
 	wlr_scene_output_layout_add_output(srv->scene_layout, lout, scene_output);
 }
 
@@ -386,6 +408,7 @@ static void exec_jtlabwc_as_user(const char *username, char **pam_envlist) {
 
 	if (initgroups(pw->pw_name, pw->pw_gid) < 0) {
 		perror("jtgreeter: initgroups");
+		_exit(127);
 	}
 	if (setgid(pw->pw_gid) < 0) {
 		perror("jtgreeter: setgid");
@@ -530,7 +553,75 @@ static void stop_tty1_getty_runtime(void) {
 }
 
 static volatile sig_atomic_t g_terminate = 0;
-static void on_term_signal(int sig) { (void)sig; g_terminate = 1; }
+static volatile sig_atomic_t g_term_signal = 0;
+static int g_signal_pipe[2] = { -1, -1 };
+
+static void on_term_signal(int sig) {
+	g_terminate = 1;
+	g_term_signal = sig;
+	if (g_signal_pipe[1] >= 0) {
+		char byte = (char)sig;
+		(void)write(g_signal_pipe[1], &byte, 1);
+	}
+}
+
+/* Wake wait_for_session() when the session child exits. */
+static void on_sigchld(int sig) {
+	if (g_signal_pipe[1] >= 0) {
+		char byte = (char)sig;
+		(void)write(g_signal_pipe[1], &byte, 1);
+	}
+}
+
+static int create_signal_pipe(void) {
+	if (pipe2(g_signal_pipe, O_CLOEXEC | O_NONBLOCK) < 0) {
+		perror("jtgreeter: pipe2");
+		return -1;
+	}
+	return 0;
+}
+
+/* Wait without blocking signal handling so termination reaches the session. */
+static int wait_for_session(pid_t pid, int *status) {
+	for (;;) {
+		pid_t r = waitpid(pid, status, WNOHANG);
+		if (r == pid) return 0;
+		if (r < 0) {
+			if (errno == EINTR) continue;
+			perror("jtgreeter: waitpid");
+			return -1;
+		}
+
+		if (g_terminate && g_term_signal) {
+			int sig = (int)g_term_signal;
+			g_term_signal = 0;
+			if (kill(pid, sig) < 0 && errno != ESRCH)
+				perror("jtgreeter: kill");
+		}
+
+		struct pollfd pfd = { .fd = g_signal_pipe[0], .events = POLLIN };
+		int pr = poll(&pfd, 1, -1);
+		if (pr < 0) {
+			if (errno == EINTR) continue;
+			perror("jtgreeter: poll");
+			return -1;
+		}
+		if (pr > 0) {
+			char buf[32];
+			while (read(g_signal_pipe[0], buf, sizeof(buf)) > 0) {}
+		}
+	}
+}
+
+/* Callers must first destroy clients and remove their signal listeners. */
+static void destroy_greeter_compositor(struct server *srv) {
+	if (srv->scene) wlr_scene_node_destroy(&srv->scene->tree.node);
+	if (srv->backend) wlr_backend_destroy(srv->backend);
+	if (srv->xkb_ctx) xkb_context_unref(srv->xkb_ctx);
+	wl_display_destroy(srv->wl_display);
+	if (srv->allocator) wlr_allocator_destroy(srv->allocator);
+	if (srv->renderer) wlr_renderer_destroy(srv->renderer);
+}
 
 static int run_greeter_once(void) {
 	struct server_g sg = {0};
@@ -563,6 +654,7 @@ static int run_greeter_once(void) {
 	srv->allocator = wlr_allocator_autocreate(srv->backend, srv->renderer);
 	if (!srv->allocator) {
 		fprintf(stderr, "jtgreeter: failed to create allocator\n");
+		wlr_renderer_destroy(srv->renderer);
 		wlr_backend_destroy(srv->backend);
 		wl_display_destroy(srv->wl_display);
 		return 1;
@@ -603,10 +695,8 @@ static int run_greeter_once(void) {
 			wl_list_remove(&sg.new_output.link);
 		if (srv->request_set_selection.link.prev && srv->request_set_selection.link.next)
 			wl_list_remove(&srv->request_set_selection.link);
-		if (srv->xkb_ctx) xkb_context_unref(srv->xkb_ctx);
 		wl_display_destroy_clients(srv->wl_display);
-		wlr_backend_destroy(srv->backend);
-		wl_display_destroy(srv->wl_display);
+		destroy_greeter_compositor(srv);
 		return 1;
 	}
 
@@ -618,10 +708,8 @@ static int run_greeter_once(void) {
 			wl_list_remove(&sg.new_output.link);
 		if (srv->request_set_selection.link.prev && srv->request_set_selection.link.next)
 			wl_list_remove(&srv->request_set_selection.link);
-		if (srv->xkb_ctx) xkb_context_unref(srv->xkb_ctx);
 		wl_display_destroy_clients(srv->wl_display);
-		wlr_backend_destroy(srv->backend);
-		wl_display_destroy(srv->wl_display);
+		destroy_greeter_compositor(srv);
 		return 1;
 	}
 
@@ -654,9 +742,7 @@ static int run_greeter_once(void) {
 	if (srv->request_set_selection.link.prev && srv->request_set_selection.link.next)
 		wl_list_remove(&srv->request_set_selection.link);
 
-	if (srv->backend) wlr_backend_destroy(srv->backend);
-	if (srv->xkb_ctx) xkb_context_unref(srv->xkb_ctx);
-	wl_display_destroy(srv->wl_display);
+	destroy_greeter_compositor(srv);
 
 	/* During handoff to user session, prevent tty1 getty/login prompt flash. */
 	if (do_launch) {
@@ -699,6 +785,8 @@ static int run_greeter_once(void) {
 			signal(SIGTERM, SIG_DFL);
 			signal(SIGINT, SIG_DFL);
 			signal(SIGHUP, SIG_DFL);
+			/* Ignored dispositions survive exec(); restore the default for the user session. */
+			signal(SIGPIPE, SIG_DFL);
 			setsid();
 
 			/* Give the user session a controlling tty on tty1 (helps logind/DRM handoff). */
@@ -716,11 +804,7 @@ static int run_greeter_once(void) {
 			_exit(127);
 		} else {
 			int status = 0;
-			while (waitpid(pid, &status, 0) < 0) {
-				if (errno == EINTR) continue;
-				perror("jtgreeter: waitpid");
-				break;
-			}
+			(void)wait_for_session(pid, &status);
 			if (pam_env) {
 				for (char **e = pam_env; *e; e++) free(*e);
 				free(pam_env);
@@ -820,6 +904,8 @@ int main(int argc, char **argv) {
 	}
 
 	/* Greeter/DM mode: run as root on a VT/seat, start user sessions with PAM. */
+	if (create_signal_pipe() < 0) return 1;
+
 	struct sigaction sa = {0};
 	sa.sa_handler = on_term_signal;
 	sigemptyset(&sa.sa_mask);
@@ -832,6 +918,12 @@ int main(int argc, char **argv) {
 
 	/* Warm page cache for installed jt* tools so user sessions start faster. */
 	preload_jt_binaries();
+
+	struct sigaction sa_chld = {0};
+	sa_chld.sa_handler = on_sigchld;
+	sigemptyset(&sa_chld.sa_mask);
+	sa_chld.sa_flags = SA_NOCLDSTOP | SA_RESTART;
+	sigaction(SIGCHLD, &sa_chld, NULL);
 
 	return run_greeter_mode();
 }

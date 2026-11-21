@@ -1,8 +1,8 @@
 #%PAM-1.0
-# Default PAM config for jtgreeter (login greeter).
-# This file may be replaced at install time with a distro-appropriate config
-# when a known PAM stack (login/system-local-login/common-*) is detected.
-auth       include      login
-account    include      login
-password   include      login
-session    include      login
+# Self-contained fallback stack for jtgreeter (login greeter).
+# Installed only when no known distro stack is detected, so it must not
+# include another stack (such as "login") that may not exist.
+auth       required   pam_unix.so
+account    required   pam_unix.so
+password   required   pam_unix.so
+session    required   pam_unix.so

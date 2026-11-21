@@ -70,7 +70,7 @@ main(int argc, char *argv[])
 	}
 
 	/* Best-effort: directory/file permissions are expected to be set by install. */
-	(void)mkdir("/etc/jt", 0777);
+	(void)mkdir("/etc/jt", 0755);
 
 	FILE *f = fopen(ACCENT_CONF_PATH, "w");
 	if (!f) {

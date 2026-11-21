@@ -1,5 +1,7 @@
 [Unit]
 Description=JTLab Greeter (Wayland login screen)
+# A display manager must keep respawning even if it crashes repeatedly.
+StartLimitIntervalSec=0
 Wants=systemd-logind.service
 After=systemd-logind.service systemd-user-sessions.service plymouth-quit-wait.service
 Conflicts=getty@tty1.service autovt@tty1.service

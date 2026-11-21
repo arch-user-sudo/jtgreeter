@@ -137,10 +137,12 @@ static inline unsigned accent_ink(unsigned rgb) {
 	return accent_contrast(bg, accent_luminance(dark)) >= accent_contrast(bg, accent_luminance(light)) ? dark : light;
 }
 static inline unsigned accent_mix(unsigned rgb, unsigned toward, double amount) {
-	if (amount < 0.0) amount = 0.0; if (amount > 1.0) amount = 1.0;
+	if (amount < 0.0) amount = 0.0;
+	if (amount > 1.0) amount = 1.0;
 	unsigned out = 0;
 	for (int shift = 16; shift >= 0; shift -= 8) {
-		unsigned a = (rgb >> shift) & 0xFF, b = (toward >> shift) & 0xFF;
+		double a = (double)((rgb >> shift) & 0xFFu);
+		double b = (double)((toward >> shift) & 0xFFu);
 		unsigned c = (unsigned)lround(a + (b - a) * amount);
 		out = (out << 8) | (c & 0xFF);
 	}
@@ -361,7 +363,15 @@ static inline bool ui_pam_authenticate_user(const char *user, const char *pass,
 	r = pam_authenticate(pamh, 0);
 	if (r != PAM_SUCCESS) goto fail;
 	r = pam_acct_mgmt(pamh, 0);
-	if (r == PAM_NEW_AUTHTOK_REQD) r = pam_chauthtok(pamh, PAM_CHANGE_EXPIRED_AUTHTOK);
+	if (r == PAM_NEW_AUTHTOK_REQD) {
+		/* The conversation callback only has the password the user just typed;
+		 * using it for the "new password" prompts would keep the expired one. */
+		if (err && errlen)
+			snprintf(err, errlen, "Password expired; contact an administrator");
+		pam_end(pamh, r);
+		ui_pam_login_clear_password();
+		return false;
+	}
 	if (r != PAM_SUCCESS) goto fail;
 	/* Password no longer needed after successful auth; keep conv struct valid. */
 	ui_pam_login_clear_password();
