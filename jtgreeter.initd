@@ -9,7 +9,6 @@ command_user="root:root"
 
 # Use supervise-daemon for reliable respawn on OpenRC (recommended).
 supervisor=supervise-daemon
-respawn_delay=2
 respawn_max=0
 
 # Logs (adjust as desired)
