@@ -78,10 +78,20 @@ static inline void ui_rounded_rect(cairo_t *cr, double x, double y, double w, do
 	cairo_close_path(cr);
 }
 
+/* Explicit Pango font options override anything derived from the target
+ * surface, so every glyph renders without antialiasing. */
+static inline void ui_font_antialias_off(PangoLayout *l) {
+	cairo_font_options_t *opts = cairo_font_options_create();
+	cairo_font_options_set_antialias(opts, CAIRO_ANTIALIAS_NONE);
+	pango_cairo_context_set_font_options(pango_layout_get_context(l), opts);
+	cairo_font_options_destroy(opts);
+}
+
 static inline void ui_text(cairo_t *cr, const char *text, double size, int weight,
 		unsigned hex, double alpha, double x, double y, int align) {
 	if (!text || !*text) return;
 	PangoLayout *l = pango_cairo_create_layout(cr);
+	ui_font_antialias_off(l);
 	PangoFontDescription *fd = pango_font_description_new();
 	pango_font_description_set_family(fd, FONT_FAMILY);
 	pango_font_description_set_absolute_size(fd, size * PANGO_SCALE);
