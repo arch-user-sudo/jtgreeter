@@ -97,7 +97,10 @@ install: jtgreeter jtgreeterctl
 	@install -d -m 0777 $(DESTDIR)/etc/jt; \
 	if [ ! -f $(DESTDIR)/etc/jt/accent.conf ]; then printf '%s\n' '#E8A03C' > $(DESTDIR)/etc/jt/accent.conf; fi; \
 	chmod 0666 $(DESTDIR)/etc/jt/accent.conf 2>/dev/null || true; \
-	echo "installed accent config $(DESTDIR)/etc/jt/accent.conf"
+	if [ ! -f $(DESTDIR)/etc/jt/rainbow.conf ]; then printf '%s\n' 'rainbow=off' > $(DESTDIR)/etc/jt/rainbow.conf; fi; \
+	chmod 0666 $(DESTDIR)/etc/jt/rainbow.conf 2>/dev/null || true; \
+	echo "installed accent config $(DESTDIR)/etc/jt/accent.conf"; \
+	echo "installed rainbow config $(DESTDIR)/etc/jt/rainbow.conf"
 	@# Install a distro-appropriate PAM config when possible for portability.
 	@pamtmp=$$(mktemp $${TMPDIR:-/tmp}/jtgreeter.pam.XXXXXX) || exit 1; \
 	trap 'rm -f "$$pamtmp"' 0 1 2 3 15; \
@@ -212,6 +215,7 @@ uninstall:
 	rm -f $(DESTDIR)$(SYSTEMD_SYSTEM_UNITDIR)/jtgreeter.service
 	rm -f $(DESTDIR)$(OPENRC_INITDIR)/jtgreeter
 	rm -f $(DESTDIR)/etc/jt/accent.conf
+	rm -f $(DESTDIR)/etc/jt/rainbow.conf
 	rmdir $(DESTDIR)/etc/jt 2>/dev/null || true
 	@if [ -z "$(DESTDIR)" ] && [ -f /etc/inittab ] && grep -q '^# jtgreeter-disabled: ' /etc/inittab 2>/dev/null; then \
 		if sed -i 's/^# jtgreeter-disabled: //' /etc/inittab; then \

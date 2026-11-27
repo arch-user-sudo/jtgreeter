@@ -13,6 +13,7 @@
 #include <unistd.h>
 
 #define LOCK_NBUFS 3
+#define RAINBOW_TICK_MS 100
 
 int run_lock_mode(int argc, char **argv);
 
@@ -145,6 +146,7 @@ static void lock_surface_draw(struct lock_surface *ls) {
 	cairo_surface_t *cs = cairo_image_surface_create_for_data(b->data, CAIRO_FORMAT_ARGB32,
 		ls->width, ls->height, stride);
 	cairo_t *cr = cairo_create(cs);
+	accent_tick(ui_mono_sec());
 	ui_draw(cr, &ls->client->ui, ls->width, ls->height);
 	cairo_destroy(cr);
 	cairo_surface_destroy(cs);
@@ -481,6 +483,12 @@ int run_lock_mode(int argc, char **argv) {
 	wl_display_flush(c.display);
 
 	while (c.running && c.display) {
+		/* jtsettings/jtgreeterctl write the shared switch at runtime; pick up
+		 * changes here without needing a greeter control socket. */
+		rainbow_poll_config();
+		/* Only ask for a repaint when the quantized hue changed. */
+		if (rainbow_mode && accent_tick(ui_mono_sec()))
+			schedule_redraw_all(&c);
 		if (c.unlock_requested) {
 			c.unlock_requested = false;
 			wl_display_roundtrip(c.display);
@@ -510,7 +518,12 @@ int run_lock_mode(int argc, char **argv) {
 		 * if no surfaces configured yet, wait for events */
 		bool any_configured = false;
 		wl_list_for_each(it, &c.surfaces, link) if (it->configured) any_configured = true;
-		if (any_configured && timeout < 0) timeout = 1000; /* fallback */
+		/* Wake often enough to notice a shared rainbow toggle even when all
+		 * frame callbacks are outstanding. */
+		if (rainbow_mode && timeout > RAINBOW_TICK_MS)
+			timeout = RAINBOW_TICK_MS;
+		if (any_configured && timeout < 0)
+			timeout = rainbow_mode ? RAINBOW_TICK_MS : 250; /* fallback */
 
 		struct pollfd pfd = { .fd = wl_display_get_fd(c.display), .events = POLLIN };
 		if (wl_display_flush(c.display) < 0 && errno == EAGAIN) pfd.events |= POLLOUT;

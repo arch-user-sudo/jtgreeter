@@ -89,6 +89,7 @@ struct server {
 	bool running;
 	bool launch_jtlabwc;
 	pam_handle_t *pamh;
+	struct wl_event_source *rainbow_timer;
 };
 
 static void launch_session(struct server *srv) {
@@ -264,6 +265,9 @@ static void output_frame(struct wl_listener *listener, void *data) {
 	(void)data;
 	struct g_output *out = wl_container_of(listener, out, frame);
 	struct server *srv = out->server;
+	/* The rainbow timer schedules the next frame; do not chain frame
+	 * callbacks at display refresh rate for a 10 Hz colour clock. */
+	accent_tick(ui_mono_sec());
 	int w = out->wlr_output->width;
 	int h = out->wlr_output->height;
 	if (w <= 0 || h <= 0) return;
@@ -330,6 +334,45 @@ static void output_frame(struct wl_listener *listener, void *data) {
 
 	if (tex) wlr_texture_destroy(tex);
 	free(pixels);
+}
+
+/* Wake outputs once so a config change (on or off) paints the current accent.
+ * Ongoing hue changes are paced by rainbow_timer_cb(). */
+static void schedule_rainbow_frames(struct server *srv) {
+	struct g_output *out;
+	wl_list_for_each(out, &srv->outputs, link)
+		if (out->wlr_output) wlr_output_schedule_frame(out->wlr_output);
+}
+
+#define RAINBOW_TICK_MS 100
+
+static int rainbow_timer_cb(void *data) {
+	struct server *srv = data;
+	if (srv && rainbow_mode) {
+		schedule_rainbow_frames(srv);
+		if (srv->rainbow_timer)
+			wl_event_source_timer_update(srv->rainbow_timer,
+				RAINBOW_TICK_MS);
+	}
+	return 0;
+}
+
+static void rainbow_timer_start(struct server *srv) {
+	if (!srv || !srv->wl_display)
+		return;
+	if (!srv->rainbow_timer) {
+		srv->rainbow_timer = wl_event_loop_add_timer(
+			wl_display_get_event_loop(srv->wl_display),
+			rainbow_timer_cb, srv);
+	}
+	if (srv->rainbow_timer)
+		wl_event_source_timer_update(srv->rainbow_timer,
+			RAINBOW_TICK_MS);
+}
+
+static void rainbow_timer_stop(struct server *srv) {
+	if (srv && srv->rainbow_timer)
+		wl_event_source_timer_update(srv->rainbow_timer, 0);
 }
 
 static void output_request_state(struct wl_listener *listener, void *data) {
@@ -615,6 +658,10 @@ static int wait_for_session(pid_t pid, int *status) {
 
 /* Callers must first destroy clients and remove their signal listeners. */
 static void destroy_greeter_compositor(struct server *srv) {
+	if (srv->rainbow_timer) {
+		wl_event_source_remove(srv->rainbow_timer);
+		srv->rainbow_timer = NULL;
+	}
 	if (srv->scene) wlr_scene_node_destroy(&srv->scene->tree.node);
 	if (srv->backend) wlr_backend_destroy(srv->backend);
 	if (srv->xkb_ctx) xkb_context_unref(srv->xkb_ctx);
@@ -716,7 +763,17 @@ static int run_greeter_once(void) {
 	setenv("WAYLAND_DISPLAY", socket, true);
 	wlr_log(WLR_INFO, "jtgreeter running on WAYLAND_DISPLAY=%s", socket);
 
+	if (rainbow_mode)
+		rainbow_timer_start(srv);
+
 	while (srv->running && !g_terminate) {
+		if (rainbow_poll_config()) {
+			if (rainbow_mode)
+				rainbow_timer_start(srv);
+			else
+				rainbow_timer_stop(srv);
+			schedule_rainbow_frames(srv);
+		}
 		wl_display_flush_clients(srv->wl_display);
 		wl_event_loop_dispatch(wl_display_get_event_loop(srv->wl_display), 16);
 	}
@@ -840,9 +897,11 @@ static int run_greeter_mode(void) {
 
 static void usage(const char *argv0) {
 	fprintf(stderr,
-		"Usage: %s [--lock] [--accent #RRGGBB]\n"
+		"Usage: %s [--lock] [--accent #RRGGBB] [rainbow|--rainbow]\n"
 		"  --lock           Run as lockscreen in an existing Wayland session\n"
-		"  --accent COLOR   Accent color (e.g. #E8A03C), like jtspeedtest\n",
+		"  --accent COLOR   Accent color (e.g. #E8A03C), like jtspeedtest\n"
+		"  rainbow          Cycle accent colors (--rainbow also works)\n"
+		"                   Persist with rainbow=on/off in /etc/jt/rainbow.conf\n",
 		argv0);
 }
 
@@ -891,10 +950,12 @@ static void preload_jt_binaries(void) {
 
 int main(int argc, char **argv) {
 	bool lock_mode = false;
-	accent_cli(&argc, argv);
 	for (int i = 1; i < argc; i++) {
 		if (!strcmp(argv[i], "--lock")) lock_mode = true;
-		else if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) {
+	}
+	accent_cli(&argc, argv, lock_mode);
+	for (int i = 1; i < argc; i++) {
+		if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) {
 			usage(argv[0]);
 			return 0;
 		}

@@ -2,6 +2,22 @@
 
 JTLab Greeter is a Wayland login screen that also works as a lockscreen.
 
+## Accent and rainbow mode
+
+`jtgreeterctl accent '#RRGGBB'` (or `jtgreeterctl '#RRGGBB'`) sets the accent
+used by both the greeter and the `--lock` screen. Rainbow mode is a shared
+setting in `/etc/jt/rainbow.conf`, which `jtsettings` owns and which the greeter
+only reads. The only valid values are:
+
+```text
+rainbow=on
+rainbow=off
+```
+
+`jtgreeterctl rainbow` prints the current value but never writes it. The files
+are read at startup and polled while running. For a single launch,
+`jtgreeter rainbow` (or `--rainbow`) also enables the cycle.
+
 ## Install
 
 ```sh

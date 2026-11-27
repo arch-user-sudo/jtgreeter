@@ -13,6 +13,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/types.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -38,6 +39,20 @@ extern unsigned accent_rgb;
 extern unsigned accent_hi_rgb;
 extern unsigned accent_lo_rgb;
 extern unsigned on_accent_rgb;
+extern unsigned accent_base_rgb;
+extern int rainbow_mode;
+extern double rainbow_start;
+
+/* Shared /etc/jt/rainbow.conf state.  These live in ui.c (not as inline
+ * statics in this header) so both the greeter and lock loops see the same
+ * mtime snapshot. */
+extern time_t rainbow_conf_sec;
+extern long rainbow_conf_nsec;
+extern off_t rainbow_conf_size;
+int rainbow_load_default(void);
+void rainbow_conf_snapshot(void);
+int rainbow_poll_config(void);
+
 #define C_ACCENT    accent_rgb
 #define C_ACCENT_HI accent_hi_rgb
 #define C_ACCENT_LO accent_lo_rgb
@@ -158,13 +173,64 @@ static inline unsigned accent_mix(unsigned rgb, unsigned toward, double amount) 
 	}
 	return out;
 }
-static inline void accent_set(unsigned rgb) {
+/* One full hue wheel every eight seconds, rendered as a saturated RGB
+ * triple.  t is seconds since rainbow mode was switched on. */
+static inline unsigned rainbow_color(double t) {
+	double phase = fmod(t, 8.0);
+	if (phase < 0.0) phase += 8.0;
+	double h = phase * 0.75;
+	int i = (int)h;
+	double f = h - i, q = 1.0 - f;
+	double r = 0.0, g = 0.0, b = 0.0;
+	switch (i) {
+	case 0: r = 1.0; g = f;   b = 0.0; break;
+	case 1: r = q;   g = 1.0; b = 0.0; break;
+	case 2: r = 0.0; g = 1.0; b = f;   break;
+	case 3: r = 0.0; g = q;   b = 1.0; break;
+	case 4: r = f;   g = 0.0; b = 1.0; break;
+	default:r = 1.0; g = 0.0; b = q;   break;
+	}
+	return ((unsigned)lround(r * 255.0) << 16) |
+	       ((unsigned)lround(g * 255.0) << 8) |
+	       (unsigned)lround(b * 255.0);
+}
+
+/* Apply only the drawing colors; never replace the base accent. */
+static inline void accent_apply(unsigned rgb) {
 	accent_rgb = rgb;
 	accent_hi_rgb = accent_mix(rgb, 0xFFFFFF, 0.16);
 	accent_lo_rgb = accent_mix(rgb, 0x000000, 0.14);
 	on_accent_rgb = accent_ink(rgb);
 }
+static inline void accent_set(unsigned rgb) {
+	accent_base_rgb = rgb;
+	accent_apply(rgb);
+}
+static inline void rainbow_set(int on, double t) {
+	int was_on = rainbow_mode;
+	rainbow_mode = on ? 1 : 0;
+	if (rainbow_mode) {
+		if (!was_on) {
+			rainbow_start = t;
+			accent_apply(rainbow_color(0.0));
+		}
+	} else if (was_on) {
+		accent_apply(accent_base_rgb);
+	}
+}
+/* Called from each frame callback so both greeter and lock screens cycle.
+ * Returns true only when the visible colour actually changed. */
+static inline bool accent_tick(double t) {
+	if (!rainbow_mode)
+		return false;
+	unsigned rgb = rainbow_color(t - rainbow_start);
+	if (rgb == accent_rgb)
+		return false;
+	accent_apply(rgb);
+	return true;
+}
 #define ACCENT_CONF_PATH "/etc/jt/accent.conf"
+#define RAINBOW_CONF_PATH "/etc/jt/rainbow.conf"
 
 static inline void accent_load_default(void) {
 	FILE *f = fopen(ACCENT_CONF_PATH, "r");
@@ -181,9 +247,17 @@ static inline void accent_load_default(void) {
 	fclose(f);
 }
 
-static inline void accent_cli(int *argc, char **argv) {
+static inline void accent_cli(int *argc, char **argv, int lock_mode) {
 	accent_load_default();
+	int config_rainbow = rainbow_load_default();
+	int cli_rainbow = 0;
 	for (int i = 1; i < *argc; i++) {
+		if (!strcmp(argv[i], "--rainbow") || !strcmp(argv[i], "rainbow")) {
+			cli_rainbow = 1;
+			for (int j = i; j + 1 < *argc; j++) argv[j] = argv[j+1];
+			(*argc)--; i--;
+			continue;
+		}
 		const char *val = NULL; int consume = 0;
 		if (!strcmp(argv[i], "--accent") && i + 1 < *argc) { val = argv[i+1]; consume = 2; }
 		else if (!strncmp(argv[i], "--accent=", 9)) { val = argv[i]+9; consume = 1; }
@@ -191,11 +265,20 @@ static inline void accent_cli(int *argc, char **argv) {
 		if (!val) continue;
 		unsigned rgb;
 		if (accent_parse(val, &rgb)) {
+			rainbow_set(0, ui_mono_sec()); /* an explicit color takes over */
 			accent_set(rgb);
 			for (int j = i; j + consume < *argc; j++) argv[j] = argv[j+consume];
 			*argc -= consume; i--;
 		}
 	}
+	/* A JTLab-launched locker gets an accent argument for its base color, but
+	 * that automatic argument must not override the shared rainbow switch.
+	 * An explicit rainbow flag also wins regardless of argument order. */
+	if (cli_rainbow || (lock_mode && config_rainbow))
+		rainbow_set(1, ui_mono_sec());
+	/* Start polling from the state we just applied; otherwise the first poll
+	 * would see the config as "changed" and undo an explicit CLI accent. */
+	rainbow_conf_snapshot();
 }
 
 static inline void ui_init(struct ui_state *ui, const char *preset_user) {
